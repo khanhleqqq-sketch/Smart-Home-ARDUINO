@@ -120,7 +120,7 @@ void setup() {
 
       if (id >= 0 && id < 4) {  // Nhóm A
         relayAState[id] = state;
-        digitalWrite(relayPinsA[id], relayAState[id] ? HIGH : LOW);
+        digitalWrite(relayPinsA[id], relayAState[id] ? LOW : HIGH);
         doc["success"] = "Relay A updated";
         doc["relay"] = id;
         doc["state"] = state;
@@ -223,3 +223,4 @@ void loop() {
   }
   // Trước 23h: nhóm B chỉ điều khiển bằng app
 }
+
