@@ -1,18 +1,28 @@
- 
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include "time.h"
 #include <ArduinoJson.h>
 #include "FS.h"
 #include "SPIFFS.h"
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <DHT.h>
+
+// ====== LCD I2C ======
+LiquidCrystal_I2C lcd(0x27, 16, 2);  
+
+// ====== Cảm biến DHT11 ======
+#define DHTPIN 4      // chân DHT11
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
 
 // ====== WiFi cấu hình tại đây ======
-const char* ssid = "Cá nè";         // đổi thành tên WiFi của bạn
-const char* password = "10072004";  // đổi thành mật khẩu WiFi
+const char* ssid = "FPT APTECH";
+const char* password = "coderc++";
 
 // ====== NTP (giờ Việt Nam) ======
 const char* ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 7 * 3600;  // múi giờ VN
+const long gmtOffset_sec = 7 * 3600;
 const int daylightOffset_sec = 0;
 
 // ====== Web server ======
@@ -23,29 +33,46 @@ const int relayPinsA[4] = {16, 17, 18, 19};
 bool relayAState[4] = {false, false, false, false};
 
 // ====== Nhóm B: cảm biến + relay ======
-const int pirPin = 34;  // cảm biến PIR
-const int relayB = 13;  // relay nhóm B
+const int pirPin = 34;
+const int relayB = 13;
 bool relayBState = false;
 
 unsigned long lastMotionTime = 0;
 unsigned long lastWifiCheck = 0;
+unsigned long lastDHTRead = 0;
+
+// ====== Biến lưu DHT11 ======
+float lastTemp = 0;
+float lastHum = 0;
 
 void setup() {
   Serial.begin(115200);
 
-  // ==== SPIFFS ====// Viết dữ liệu lên flash
+  // ==== LCD + DHT11 ====
+  Wire.begin(2, 5); // SDA=2, SCL=5
+  lcd.init();
+  lcd.backlight();
+  dht.begin();
+
+  lcd.setCursor(0, 0);
+  lcd.print("ESP32 SmartHome");
+  lcd.setCursor(0, 1);
+  lcd.print("Dang khoi dong");
+  delay(2000);
+  lcd.clear();
+
+  // ==== SPIFFS ====
   if (!SPIFFS.begin(true)) {
     Serial.println("SPIFFS lỗi!");
     return;
   }
-  // Ghi file
+
   File f = SPIFFS.open("/data.txt", FILE_WRITE);
   if (f) {
     f.println("Hello ESP32");
     f.close();
   }
 
-  // Đọc file
   f = SPIFFS.open("/data.txt");
   if (f) {
     while (f.available()) {
@@ -155,35 +182,57 @@ void setup() {
     request->send(400, "application/json", json);
   });
 
-  // ==== API demo ====
-  server.on("/demo", HTTP_POST, [](AsyncWebServerRequest* request) {
-    if (request->hasParam("param1") && request->hasParam("param2")) {
-      String param1 = request->getParam("param1")->value();
-      String param2 = request->getParam("param2")->value();
-      String result = param1 + param2;
-
-      DynamicJsonDocument doc(128);
-      doc["result"] = result;
-      String json;
-      serializeJson(doc, json);
-      request->send(200, "application/json", json);
-    } else {
-      request->send(400, "application/json", "{\"error\":\"Missing parameters\"}");
-    }
+  // ==== API đọc DHT11 ====
+  server.on("/dht", HTTP_GET, [](AsyncWebServerRequest* request) {
+    DynamicJsonDocument doc(128);
+    doc["temperature"] = lastTemp;
+    doc["humidity"] = lastHum;
+    String json;
+    serializeJson(doc, json);
+    request->send(200, "application/json", json);
   });
 
   server.begin();
 }
 
 void loop() {
+  // ==== Đọc DHT11 mỗi 2 giây ====
+  unsigned long now = millis();
+  if (now - lastDHTRead >= 2000) {
+    lastDHTRead = now;
+    float h = dht.readHumidity();
+    float t = dht.readTemperature();
+
+    if (!isnan(h) && !isnan(t)) {
+      lastTemp = t;
+      lastHum = h;
+
+      Serial.printf("Nhiet do: %.1f*C - Do am: %.1f%%\n", t, h);
+
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Nhiet do: ");
+      lcd.print(t);
+      lcd.print((char)223);
+      lcd.print("C");
+
+      lcd.setCursor(0, 1);
+      lcd.print("Do am: ");
+      lcd.print(h);
+      lcd.print("%");
+    } else {
+      Serial.println("❌ Loi doc DHT11!");
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("Loi DHT11!");
+    }
+  }
+
+  // ==== Xử lý giờ + cảm biến PIR ====
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
-    static unsigned long lastPrint = 0;
-    unsigned long now = millis();
-    if (now - lastPrint >= 1000) {
-      lastPrint = now;
-      Serial.println("Không lấy được thời gian");
-    }
+    Serial.println("Không lấy được thời gian");
+    delay(1000);
     return;
   }
 
@@ -209,7 +258,7 @@ void loop() {
             stillMotion = true;
             break;
           }
-          delay(100);  // đọc cảm biến mỗi 100ms
+          delay(100);
         }
 
         if (stillMotion) {
@@ -221,6 +270,4 @@ void loop() {
       }
     }
   }
-  // Trước 23h: nhóm B chỉ điều khiển bằng app
 }
-
