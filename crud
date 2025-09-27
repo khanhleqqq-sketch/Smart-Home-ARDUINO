@@ -6,8 +6,8 @@
 #include "SPIFFS.h"
 
 // ====== WiFi cấu hình tại đây ======
-const char* ssid = "Cá nè";         // đổi thành tên WiFi của bạn
-const char* password = "10072004";  // đổi thành mật khẩu WiFi
+const char* ssid = "FPT APTACH";         // đổi thành tên WiFi của bạn
+const char* password = "coderc++";  // đổi thành mật khẩu WiFi
 
 // ====== NTP (giờ Việt Nam) ======
 const char* ntpServer = "pool.ntp.org";
