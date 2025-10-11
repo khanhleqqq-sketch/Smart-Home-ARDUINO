@@ -7,6 +7,8 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <DHT.h>
+#include "../Util/Database_Util/Database_Util.ino"
+#include "../Util/Restfull_util/API_Handler.ino"
 
 // ====== LCD I2C ======
 LiquidCrystal_I2C lcd(0x27, 16, 2);  
@@ -61,25 +63,14 @@ void setup() {
   delay(2000);
   lcd.clear();
 
-  // ==== SPIFFS ====
-  if (!SPIFFS.begin(true)) {
-    Serial.println("SPIFFS lỗi!");
+  // ==== Initialize Database ====
+  if (!initDatabase()) {
+    Serial.println("Database initialization failed!");
     return;
   }
 
-  File f = SPIFFS.open("/data.txt", FILE_WRITE);
-  if (f) {
-    f.println("Hello ESP32");
-    f.close();
-  }
-
-  f = SPIFFS.open("/data.txt");
-  if (f) {
-    while (f.available()) {
-      Serial.write(f.read());
-    }
-    f.close();
-  }
+  // ==== Create default data files ====
+  initDefaultData();
 
   // ==== Relay nhóm A ====
   for (int i = 0; i < 4; i++) {
@@ -109,88 +100,9 @@ void setup() {
   // ==== NTP ====
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
 
-  // ==== API điều khiển relay ====
-  server.on("/relay", HTTP_GET, [](AsyncWebServerRequest* request) {
-    DynamicJsonDocument doc(256);
-
-    if (request->hasParam("id") && request->hasParam("state")) {
-      String idStr = request->getParam("id")->value();
-      String stateStr = request->getParam("state")->value();
-
-      JsonArray errors = doc.createNestedArray("errors");
-
-      if (idStr.length() != 1 || !isDigit(idStr[0])) {
-        errors.add("Invalid ID: must be a digit (0-9)");
-      }
-      if (stateStr.length() != 1 || !isDigit(stateStr[0])) {
-        errors.add("Invalid state: must be between 0 and 1");
-      }
-
-      if (errors.size() > 0) {
-        String json;
-        serializeJson(doc, json);
-        request->send(400, "application/json", json);
-        return;
-      }
-
-      int id = idStr.toInt();
-      int state = stateStr.toInt();
-
-      if (state != 0 && state != 1) {
-        doc["error"] = "Invalid state: must be 0 or 1";
-        doc["code"] = 422;
-        String json;
-        serializeJson(doc, json);
-        request->send(422, "application/json", json);
-        return;
-      }
-
-      if (id >= 0 && id < 4) {  // Nhóm A
-        relayAState[id] = state;
-        digitalWrite(relayPinsA[id], relayAState[id] ? LOW : HIGH);
-        doc["success"] = "Relay A updated";
-        doc["relay"] = id;
-        doc["state"] = state;
-        String json;
-        serializeJson(doc, json);
-        request->send(200, "application/json", json);
-        return;
-      }
-
-      if (id == 5) {  // Nhóm B
-        relayBState = state;
-        digitalWrite(relayB, relayBState ? HIGH : LOW);
-        doc["success"] = "Relay B updated";
-        doc["relay"] = id;
-        doc["state"] = state;
-        String json;
-        serializeJson(doc, json);
-        request->send(200, "application/json", json);
-        return;
-      }
-
-      doc["error"] = "Relay ID not found";
-      String json;
-      serializeJson(doc, json);
-      request->send(404, "application/json", json);
-      return;
-    }
-
-    doc["error"] = "Missing parameters: require id & state";
-    String json;
-    serializeJson(doc, json);
-    request->send(400, "application/json", json);
-  });
-
-  // ==== API đọc DHT11 ====
-  server.on("/dht", HTTP_GET, [](AsyncWebServerRequest* request) {
-    DynamicJsonDocument doc(128);
-    doc["temperature"] = lastTemp;
-    doc["humidity"] = lastHum;
-    String json;
-    serializeJson(doc, json);
-    request->send(200, "application/json", json);
-  });
+  // ==== Setup all API endpoints ====
+  setupAllAPIs(server, lastTemp, lastHum);
+  setupDatabaseAPI(server);
 
   server.begin();
 }
