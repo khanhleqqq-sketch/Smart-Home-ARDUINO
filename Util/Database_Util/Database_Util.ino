@@ -5,146 +5,361 @@
 #include "FS.h"
 #include "SPIFFS.h"
 
+// ====== Database Utility Functions ======
 
+// Initialize database (SPIFFS)
+bool initDatabase() {
+  if (!SPIFFS.begin(true)) {
+    Serial.println("Failed to mount SPIFFS");
+    return false;
+  }
+  Serial.println("Database (SPIFFS) initialized");
+  return true;
+}
 
-  // ==== Relay nhóm A ====
-  for (int i = 0; i < 4; i++) {
-    pinMode(relayPinsA[i], OUTPUT);
-    digitalWrite(relayPinsA[i], LOW);
+// Initialize default database files
+void initDefaultData() {
+  // Create default "house" data if it doesn't exist
+  if (!dataExists("house")) {
+    DynamicJsonDocument houseDoc(512);
+    houseDoc["name"] = "My Smart Home";
+    houseDoc["address"] = "123 Main Street";
+    houseDoc["rooms"] = 4;
+
+    JsonArray devices = houseDoc.createNestedArray("devices");
+    JsonObject relay1 = devices.createNestedObject();
+    relay1["id"] = 0;
+    relay1["name"] = "Living Room Light";
+    relay1["type"] = "relay";
+
+    JsonObject relay2 = devices.createNestedObject();
+    relay2["id"] = 1;
+    relay2["name"] = "Bedroom Light";
+    relay2["type"] = "relay";
+
+    JsonObject relay3 = devices.createNestedObject();
+    relay3["id"] = 2;
+    relay3["name"] = "Kitchen Light";
+    relay3["type"] = "relay";
+
+    JsonObject relay4 = devices.createNestedObject();
+    relay4["id"] = 3;
+    relay4["name"] = "Bathroom Light";
+    relay4["type"] = "relay";
+
+    JsonObject motionSensor = devices.createNestedObject();
+    motionSensor["id"] = 5;
+    motionSensor["name"] = "Motion Sensor Light";
+    motionSensor["type"] = "pir_relay";
+
+    if (saveData("house", houseDoc.as<JsonVariant>())) {
+      Serial.println("Default 'house' data created");
+    }
   }
 
-  // ==== Nhóm B ====
-  pinMode(pirPin, INPUT);
-  pinMode(relayB, OUTPUT);
-  digitalWrite(relayB, LOW);
+  // Create default "user_info" data if it doesn't exist
+  if (!dataExists("user_info")) {
+    DynamicJsonDocument userDoc(512);
 
+    JsonArray users = userDoc.createNestedArray("users");
 
- // ==== API điều khiển relay ====
-  server.on("/relay", HTTP_GET, [](AsyncWebServerRequest* request) {
-    DynamicJsonDocument doc(256);
+    JsonObject user1 = users.createNestedObject();
+    user1["id"] = 1;
+    user1["name"] = "Admin";
+    user1["email"] = "admin@smarthome.com";
+    user1["role"] = "admin";
+    user1["created_at"] = "2025-01-01";
 
-    if (request->hasParam("id") && request->hasParam("state")) {
-      String idStr = request->getParam("id")->value();
-      String stateStr = request->getParam("state")->value();
+    JsonObject user2 = users.createNestedObject();
+    user2["id"] = 2;
+    user2["name"] = "User";
+    user2["email"] = "user@smarthome.com";
+    user2["role"] = "user";
+    user2["created_at"] = "2025-01-01";
 
-      JsonArray errors = doc.createNestedArray("errors");
+    if (saveData("user_info", userDoc.as<JsonVariant>())) {
+      Serial.println("Default 'user_info' data created");
+    }
+  }
 
-      if (idStr.length() != 1 || !isDigit(idStr[0])) {
-        errors.add("Invalid ID: must be a digit (0-9)");
-      }
-      if (stateStr.length() != 1 || !isDigit(stateStr[0])) {
-        errors.add("Invalid state: must be between 0 and 1");
-      }
+  Serial.println("Default data initialization complete");
+}
 
-      if (errors.size() > 0) {
+// Save data to database (supports any JSON type: object, array, string, number, boolean)
+bool saveData(const String& key, JsonVariant data) {
+  String filepath = "/db_" + key + ".json";
+
+  File file = SPIFFS.open(filepath, FILE_WRITE);
+  if (!file) {
+    Serial.println("Failed to open file for writing: " + filepath);
+    return false;
+  }
+
+  // Serialize JSON data to file
+  size_t bytesWritten = serializeJson(data, file);
+  file.close();
+
+  if (bytesWritten == 0) {
+    Serial.println("Failed to write data to: " + filepath);
+    return false;
+  }
+
+  Serial.println("Data saved to: " + filepath + " (" + String(bytesWritten) + " bytes)");
+  return true;
+}
+
+// Load data from database
+bool loadData(const String& key, JsonDocument& doc) {
+  String filepath = "/db_" + key + ".json";
+
+  if (!SPIFFS.exists(filepath)) {
+    Serial.println("File does not exist: " + filepath);
+    return false;
+  }
+
+  File file = SPIFFS.open(filepath, FILE_READ);
+  if (!file) {
+    Serial.println("Failed to open file for reading: " + filepath);
+    return false;
+  }
+
+  // Deserialize JSON data from file
+  DeserializationError error = deserializeJson(doc, file);
+  file.close();
+
+  if (error) {
+    Serial.println("Failed to parse JSON from: " + filepath);
+    Serial.println("Error: " + String(error.c_str()));
+    return false;
+  }
+
+  Serial.println("Data loaded from: " + filepath);
+  return true;
+}
+
+// Delete data from database
+bool deleteData(const String& key) {
+  String filepath = "/db_" + key + ".json";
+
+  if (!SPIFFS.exists(filepath)) {
+    Serial.println("File does not exist: " + filepath);
+    return false;
+  }
+
+  if (SPIFFS.remove(filepath)) {
+    Serial.println("Data deleted: " + filepath);
+    return true;
+  } else {
+    Serial.println("Failed to delete: " + filepath);
+    return false;
+  }
+}
+
+// Check if key exists in database
+bool dataExists(const String& key) {
+  String filepath = "/db_" + key + ".json";
+  return SPIFFS.exists(filepath);
+}
+
+// List all keys in database
+void listAllKeys() {
+  File root = SPIFFS.open("/");
+  File file = root.openNextFile();
+
+  Serial.println("=== Database Keys ===");
+  while (file) {
+    String filename = String(file.name());
+    if (filename.startsWith("/db_") && filename.endsWith(".json")) {
+      String key = filename.substring(4, filename.length() - 5);
+      Serial.println("- " + key + " (" + String(file.size()) + " bytes)");
+    }
+    file = root.openNextFile();
+  }
+  Serial.println("====================");
+}
+
+// Get database info (total size, free space, etc.)
+void getDatabaseInfo() {
+  size_t totalBytes = SPIFFS.totalBytes();
+  size_t usedBytes = SPIFFS.usedBytes();
+  size_t freeBytes = totalBytes - usedBytes;
+
+  Serial.println("=== Database Info ===");
+  Serial.println("Total: " + String(totalBytes) + " bytes");
+  Serial.println("Used: " + String(usedBytes) + " bytes");
+  Serial.println("Free: " + String(freeBytes) + " bytes");
+  Serial.println("====================");
+}
+
+// ====== Database API Endpoints ======
+
+void setupDatabaseAPI(AsyncWebServer& server) {
+
+  // POST /db/save - Save data
+  server.on("/db/save", HTTP_POST,
+    [](AsyncWebServerRequest* request) {},
+    NULL,
+    [](AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
+      DynamicJsonDocument responseDoc(256);
+
+      if (!request->hasParam("key", true)) {
+        responseDoc["error"] = "Missing 'key' parameter";
         String json;
-        serializeJson(doc, json);
+        serializeJson(responseDoc, json);
         request->send(400, "application/json", json);
         return;
       }
 
-      int id = idStr.toInt();
-      int state = stateStr.toInt();
+      String key = request->getParam("key", true)->value();
 
-      if (state != 0 && state != 1) {
-        doc["error"] = "Invalid state: must be 0 or 1";
-        doc["code"] = 422;
+      // Parse incoming JSON data
+      DynamicJsonDocument inputDoc(4096);
+      DeserializationError error = deserializeJson(inputDoc, data, len);
+
+      if (error) {
+        responseDoc["error"] = "Invalid JSON data";
+        responseDoc["details"] = error.c_str();
         String json;
-        serializeJson(doc, json);
-        request->send(422, "application/json", json);
+        serializeJson(responseDoc, json);
+        request->send(400, "application/json", json);
         return;
       }
 
-      if (id >= 0 && id < 4) {  // Nhóm A
-        relayAState[id] = state;
-        digitalWrite(relayPinsA[id], relayAState[id] ? HIGH : LOW);
-        doc["success"] = "Relay A updated";
-        doc["relay"] = id;
-        doc["state"] = state;
+      // Save data
+      if (saveData(key, inputDoc.as<JsonVariant>())) {
+        responseDoc["success"] = true;
+        responseDoc["message"] = "Data saved successfully";
+        responseDoc["key"] = key;
         String json;
-        serializeJson(doc, json);
+        serializeJson(responseDoc, json);
         request->send(200, "application/json", json);
-        return;
-      }
-
-      if (id == 5) {  // Nhóm B
-        relayBState = state;
-        digitalWrite(relayB, relayBState ? HIGH : LOW);
-        doc["success"] = "Relay B updated";
-        doc["relay"] = id;
-        doc["state"] = state;
+      } else {
+        responseDoc["error"] = "Failed to save data";
         String json;
-        serializeJson(doc, json);
-        request->send(200, "application/json", json);
-        return;
+        serializeJson(responseDoc, json);
+        request->send(500, "application/json", json);
       }
+    }
+  );
 
-      doc["error"] = "Relay ID not found";
+  // GET /db/load?key=<key> - Load data
+  server.on("/db/load", HTTP_GET, [](AsyncWebServerRequest* request) {
+    DynamicJsonDocument responseDoc(256);
+
+    if (!request->hasParam("key")) {
+      responseDoc["error"] = "Missing 'key' parameter";
       String json;
-      serializeJson(doc, json);
-      request->send(404, "application/json", json);
+      serializeJson(responseDoc, json);
+      request->send(400, "application/json", json);
       return;
     }
 
-    doc["error"] = "Missing parameters: require id & state";
-    String json;
-    serializeJson(doc, json);
-    request->send(400, "application/json", json);
-  });
+    String key = request->getParam("key")->value();
+    DynamicJsonDocument dataDoc(4096);
 
-  // ==== API demo ====
-  server.on("/demo", HTTP_POST, [](AsyncWebServerRequest* request) {
-    if (request->hasParam("param1") && request->hasParam("param2")) {
-      String param1 = request->getParam("param1")->value();
-      String param2 = request->getParam("param2")->value();
-      String result = param1 + param2;
-
-      DynamicJsonDocument doc(128);
-      doc["result"] = result;
+    if (loadData(key, dataDoc)) {
       String json;
-      serializeJson(doc, json);
+      serializeJson(dataDoc, json);
       request->send(200, "application/json", json);
     } else {
-      request->send(400, "application/json", "{\"error\":\"Missing parameters\"}");
+      responseDoc["error"] = "Failed to load data";
+      responseDoc["key"] = key;
+      String json;
+      serializeJson(responseDoc, json);
+      request->send(404, "application/json", json);
     }
   });
 
-  server.begin();
-}
+  // DELETE /db/delete?key=<key> - Delete data
+  server.on("/db/delete", HTTP_DELETE, [](AsyncWebServerRequest* request) {
+    DynamicJsonDocument responseDoc(256);
 
-void loop() {
- 
-  // Sau 23h: bật chế độ cảm biến
-  if (hour >= 23) {
-    int pirValue = digitalRead(pirPin);
-
-    if (pirValue == HIGH) {
-      lastMotionTime = millis();
-      digitalWrite(relayB, HIGH);
-      relayBState = true;
+    if (!request->hasParam("key")) {
+      responseDoc["error"] = "Missing 'key' parameter";
+      String json;
+      serializeJson(responseDoc, json);
+      request->send(400, "application/json", json);
+      return;
     }
 
-    if (relayBState) {
-      if (millis() - lastMotionTime > 5UL * 60UL * 1000UL) {  // hết 5 phút
-        unsigned long checkStart = millis();
-        bool stillMotion = false;
+    String key = request->getParam("key")->value();
 
-        while (millis() - checkStart < 60UL * 1000UL) {  // kiểm tra thêm 1 phút
-          if (digitalRead(pirPin) == HIGH) {
-            stillMotion = true;
-            break;
-          }
-          delay(100);  // đọc cảm biến mỗi 100ms
-        }
+    if (deleteData(key)) {
+      responseDoc["success"] = true;
+      responseDoc["message"] = "Data deleted successfully";
+      responseDoc["key"] = key;
+      String json;
+      serializeJson(responseDoc, json);
+      request->send(200, "application/json", json);
+    } else {
+      responseDoc["error"] = "Failed to delete data";
+      responseDoc["key"] = key;
+      String json;
+      serializeJson(responseDoc, json);
+      request->send(404, "application/json", json);
+    }
+  });
 
-        if (stillMotion) {
-          lastMotionTime = millis();
-        } else {
-          digitalWrite(relayB, LOW);
-          relayBState = false;
-        }
+  // GET /db/exists?key=<key> - Check if key exists
+  server.on("/db/exists", HTTP_GET, [](AsyncWebServerRequest* request) {
+    DynamicJsonDocument responseDoc(128);
+
+    if (!request->hasParam("key")) {
+      responseDoc["error"] = "Missing 'key' parameter";
+      String json;
+      serializeJson(responseDoc, json);
+      request->send(400, "application/json", json);
+      return;
+    }
+
+    String key = request->getParam("key")->value();
+    responseDoc["key"] = key;
+    responseDoc["exists"] = dataExists(key);
+
+    String json;
+    serializeJson(responseDoc, json);
+    request->send(200, "application/json", json);
+  });
+
+  // GET /db/list - List all keys
+  server.on("/db/list", HTTP_GET, [](AsyncWebServerRequest* request) {
+    DynamicJsonDocument responseDoc(2048);
+    JsonArray keys = responseDoc.createNestedArray("keys");
+
+    File root = SPIFFS.open("/");
+    File file = root.openNextFile();
+
+    while (file) {
+      String filename = String(file.name());
+      if (filename.startsWith("/db_") && filename.endsWith(".json")) {
+        String key = filename.substring(4, filename.length() - 5);
+        JsonObject keyObj = keys.createNestedObject();
+        keyObj["key"] = key;
+        keyObj["size"] = file.size();
       }
+      file = root.openNextFile();
     }
-  }
-  // Trước 23h: nhóm B chỉ điều khiển bằng app
+
+    String json;
+    serializeJson(responseDoc, json);
+    request->send(200, "application/json", json);
+  });
+
+  // GET /db/info - Get database info
+  server.on("/db/info", HTTP_GET, [](AsyncWebServerRequest* request) {
+    DynamicJsonDocument responseDoc(256);
+
+    size_t totalBytes = SPIFFS.totalBytes();
+    size_t usedBytes = SPIFFS.usedBytes();
+    size_t freeBytes = totalBytes - usedBytes;
+
+    responseDoc["total_bytes"] = totalBytes;
+    responseDoc["used_bytes"] = usedBytes;
+    responseDoc["free_bytes"] = freeBytes;
+    responseDoc["usage_percent"] = (usedBytes * 100) / totalBytes;
+
+    String json;
+    serializeJson(responseDoc, json);
+    request->send(200, "application/json", json);
+  });
 }
